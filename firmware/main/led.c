@@ -12,12 +12,15 @@
 #include "led_indicator_strips.h"
 
 #include "config.h"
-#include "ethernet.h"
 #include "events.h"
 
 #include "led.h"
 
-led_indicator_handle_t led_handle;
+#define LED_SYSTEM 0
+
+static led_strip_handle_t led_strip; // LED strip handle
+#define LED_IRGB(i, r, g, b) SET_IRGB(i, r, g, b)
+
 bool sniffer_running;
 bool mqtt_connected;
 
@@ -31,32 +34,12 @@ static struct {
 } s_pulse;
 static esp_timer_handle_t s_pulse_timer;
 
-#define LED_IRGB(i, r, g, b) SET_IRGB(i, r, g, b)
-
-#define LED_SYSTEM  0
-#define LED_SNIFFER 1
-#define LED_ETH     2
-#define LED_MQTT    3
-#define LED_CITS    4
-
-#define LED_ETH_COLOR_100M LED_IRGB(LED_ETH,    0, 0xFF, 0)
-#define LED_ETH_COLOR_10M  LED_IRGB(LED_ETH, 0xFF, 0xA0, 0)
-
-static uint32_t system_led_state  = LED_IRGB(LED_SYSTEM,  0xFF, 0xFF, 0xFF);
-static uint32_t sniffer_led_state = LED_IRGB(LED_SNIFFER, 0xFF,    0,    0);
-static uint32_t eth_led_state     = LED_IRGB(LED_ETH,        0,    0,    0);
-static uint32_t cits_led_state    = LED_IRGB(LED_CITS,       0,    0,    0);
-static uint32_t mqtt_led_state    = LED_IRGB(LED_MQTT,       0,    0,    0);
-
-static bool system_led_blink_state;
+static uint8_t ble_led_state = 0xFF;
+static uint8_t sniffer_led_state = 0x00;
+static uint8_t cits_led_state    = 0x00;
 
 static esp_timer_handle_t system_led_timer_handle;
 static esp_timer_handle_t cits_led_timer_handle;
-static esp_timer_handle_t eth_led_timer_handle;
-
-static eth_speed_t eth_speed;
-static bool eth_link_state;
-static bool eth_led_blink_state;
 
 static uint8_t led_brightness;
 
@@ -71,102 +54,37 @@ static void set_led_with_brightness(led_indicator_handle_t handle, uint32_t irgb
     g = ((uint32_t)g) * ((uint32_t)led_brightness) / 255u;
     b = ((uint32_t)b) * ((uint32_t)led_brightness) / 255u;
 
-    led_indicator_set_rgb(handle, SET_IRGB(i, r, g, b));
+    led_strip_set_pixel(handle, i, r, g, b);
+    led_strip_refresh(handle);
 }
 
-static void set_eth_led_disconnected(void)
-{
-    esp_timer_stop_blocking(eth_led_timer_handle, 10 / portTICK_PERIOD_MS);
-
-    eth_led_state = LED_IRGB(LED_ETH, 0, 0, 0);
-    set_led_with_brightness(led_handle, eth_led_state);
+static void set_led_color_based_on_state() {
+    set_led_with_brightness(led_strip, LED_IRGB(LED_SYSTEM, sniffer_led_state, cits_led_state, ble_led_state));
 }
 
-static void set_eth_led_connected(void)
-{
-    esp_timer_stop_blocking(eth_led_timer_handle, 10 / portTICK_PERIOD_MS);
-
-    eth_led_blink_state = false;
-    eth_led_state = LED_IRGB(LED_ETH, 0, 0, 0);
-    set_led_with_brightness(led_handle, eth_led_state);
-
-    esp_timer_start_periodic(eth_led_timer_handle, 500000);
-}
-
-static void set_eth_led_connected_with_ip(void)
-{
-    esp_timer_stop_blocking(eth_led_timer_handle, 10 / portTICK_PERIOD_MS);
-
-    eth_led_state = eth_speed == ETH_SPEED_100M ? LED_ETH_COLOR_100M : LED_ETH_COLOR_10M;
-    set_led_with_brightness(led_handle, eth_led_state);
-}
-
-static void set_mqtt_led_destroyed(void)
-{
-    mqtt_led_state = LED_IRGB(LED_MQTT, 0, 0, 0);
-    set_led_with_brightness(led_handle, mqtt_led_state);
-}
-
-static void set_mqtt_led_disconnected(void)
-{
-    mqtt_led_state = LED_IRGB(LED_MQTT, 0xFF, 0xFF, 0);
-    set_led_with_brightness(led_handle, mqtt_led_state);
-}
-
-static void set_mqtt_led_connected(void)
-{
-    mqtt_led_state = LED_IRGB(LED_MQTT, 0, 0xFF, 0);
-    set_led_with_brightness(led_handle, mqtt_led_state);
-}
 
 static void set_cits_led_idle(void)
 {
-    cits_led_state = LED_IRGB(LED_CITS, 0, 0, 0);
-    set_led_with_brightness(led_handle, cits_led_state);
+    cits_led_state = 0x00;
+    set_led_color_based_on_state();
 }
 
 static void set_cits_led_active(void)
 {
-    cits_led_state = mqtt_connected ? LED_IRGB(LED_CITS, 0, 0, 0xFF) : LED_IRGB(LED_CITS, 0xFF, 0xA0, 0);
-    set_led_with_brightness(led_handle, cits_led_state);
+    cits_led_state = 0x78;
+    set_led_color_based_on_state();
 }
 
 static void set_sniffer_led_stopped(void)
 {
-    sniffer_led_state = LED_IRGB(LED_SNIFFER, 0xFF, 0, 0);
-    set_led_with_brightness(led_handle, sniffer_led_state);
+    sniffer_led_state = 0x00;
+    set_led_color_based_on_state();
 }
 
 static void set_sniffer_led_running(void)
 {
-    sniffer_led_state = LED_IRGB(LED_SNIFFER, 0, 0xFF, 0);
-    set_led_with_brightness(led_handle, sniffer_led_state);
-}
-
-static void app_event_handler(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data)
-{
-    switch (event_id)
-    {
-    case APP_ETHERNET_MGMT_INTERFACE_CONNECTED:
-        eth_link_state = true;
-        eth_speed = ethernet_get_mgmt_if_link_speed();
-        set_eth_led_connected();
-        break;
-    case APP_ETHERNET_MGMT_INTERFACE_GOT_IP:
-        set_eth_led_connected_with_ip();
-        set_mqtt_led_disconnected();
-        break;
-    case APP_ETHERNET_MGMT_INTERFACE_LOST_IP:
-        if (eth_link_state)
-            set_eth_led_connected();
-        set_mqtt_led_destroyed();
-        break;
-    case APP_ETHERNET_MGMT_INTERFACE_DISCONNECTED:
-        eth_link_state = false;
-        set_eth_led_disconnected();
-        set_mqtt_led_destroyed();
-        break;
-    }
+    sniffer_led_state = 0x78;
+    set_led_color_based_on_state();
 }
 
 static void sniffer_event_handler(void* arg, esp_event_base_t event_base,
@@ -195,46 +113,27 @@ static void sniffer_event_handler(void* arg, esp_event_base_t event_base,
     }
 }
 
-static void mqtt_event_handler(void* arg, esp_event_base_t event_base,
-                               int32_t event_id, void* event_data)
-{
-    switch (event_id)
-    {
-    case MQTT_CONNECTED:
-        mqtt_connected = true;
-        set_mqtt_led_connected();
-        break;
-    case MQTT_DISCONNECTED:
-        mqtt_connected = false;
-        if (eth_link_state)
-            set_mqtt_led_disconnected();
-        else
-            set_mqtt_led_destroyed();
-        break;
-    }
-}
 
 static void apply_activity_led(void)
 {
     if (s_pulse.active) {
-        set_led_with_brightness(led_handle,
+        set_led_with_brightness(led_strip,
             LED_IRGB(LED_SYSTEM, s_pulse.r, s_pulse.g, s_pulse.b));
         return;
     }
-    /* Idle background: encodes whether the sniffer is in its capture phase
-     * and whether a BLE client is hanging on. Mid brightness — pulses still
-     * pop because they go to 0xFF. */
-    uint8_t r = 0, g = 0, b = 0;
-    if (sniffer_running && s_ble_connected) {
-        r = 0x00; g = 0x40; b = 0x40;        /* teal — all good */
-    } else if (sniffer_running) {
-        r = 0x60; g = 0x18; b = 0x00;        /* orange — capturing, no BLE */
-    } else if (s_ble_connected) {
-        r = 0x00; g = 0x00; b = 0x60;        /* blue — BLE only */
-    } else {
-        r = 0x20; g = 0x20; b = 0x20;        /* white — idle */
+
+    ble_led_state = 0xFF;
+    sniffer_led_state = 0x00;
+
+    if(sniffer_running){
+        sniffer_led_state = 0x78;
     }
-    set_led_with_brightness(led_handle, LED_IRGB(LED_SYSTEM, r, g, b));
+    if(s_ble_connected){
+        ble_led_state = 0x00;
+    }
+    cits_led_state    = 0x00;
+
+    set_led_color_based_on_state();
 }
 
 static void pulse_end_cb(void *arg)
@@ -256,14 +155,18 @@ static void led_pulse(uint8_t r, uint8_t g, uint8_t b, int ms)
 
 void led_pulse_sniffer_rx(void) { led_pulse(0x00, 0xFF, 0x00, 80); }
 void led_pulse_ble_tx(void)     { led_pulse(0x00, 0x00, 0xFF, 60); }
-void led_pulse_usb_tx(void)     { led_pulse(0x00, 0xFF, 0xFF, 40); }
+void led_pulse_usb_tx(void)     { led_pulse(0xFF, 0xFF, 0x00, 40); }
 
 void led_status_ble_connected(bool c)
 {
     s_ble_connected = c;
     /* Show the transition with a brief signal pulse: cyan = link up,
      * red = link gone, then settle into the new idle background. */
-    led_pulse(c ? 0x00 : 0xFF, c ? 0xFF : 0x00, c ? 0xFF : 0x00, 250);
+     if(c){
+        led_pulse(0x00, 0xFF, 0xFF, 250);
+     }else{
+        led_pulse(0xFF, 0x00, 0x00, 250);
+     }
 }
 
 void led_status_sniffer_running(bool r)
@@ -280,16 +183,6 @@ static void system_led_timer_cb(void *)
     if (!s_pulse.active) apply_activity_led();
 }
 
-static void eth_led_timer_cb(void *)
-{
-    eth_led_state = eth_led_blink_state ?
-                (eth_speed == ETH_SPEED_100M ? LED_ETH_COLOR_100M : LED_ETH_COLOR_10M) :
-                LED_IRGB(LED_ETH, 0, 0, 0);
-    set_led_with_brightness(led_handle, eth_led_state);
-
-    eth_led_blink_state = !eth_led_blink_state;
-}
-
 static void cits_led_timer_cb(void *)
 {
     set_cits_led_idle();
@@ -303,10 +196,6 @@ void led_update(void)
     led_brightness = brightness;
 
     apply_activity_led();
-    set_led_with_brightness(led_handle, sniffer_led_state);
-    set_led_with_brightness(led_handle, eth_led_state);
-    set_led_with_brightness(led_handle, mqtt_led_state);
-    set_led_with_brightness(led_handle, cits_led_state);
 
     /* Refresh idle background once per second as a fail-safe in case some
      * other writer touched the strip. apply_activity_led skips if a pulse
@@ -316,21 +205,20 @@ void led_update(void)
 
 void led_init(void)
 {
-    led_indicator_strips_config_t strips_config = {
-        .led_strip_cfg = {
-            .strip_gpio_num = CONFIG_LEDSTRIP_PIN,
-            .max_leds = 5,
-            .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_GRB,
-            .led_model = LED_MODEL_WS2812
-        },
-        .led_strip_driver = LED_STRIP_RMT,
-        .led_strip_rmt_cfg = {0}
+    led_strip_config_t strip_config = {
+        .strip_gpio_num = CONFIG_LEDSTRIP_PIN,                         // Set GPIO pin
+        .max_leds = 1,                                                   // Set number of LEDs
+        .color_component_format = LED_STRIP_COLOR_COMPONENT_FMT_RGB, // Set color format
     };
-    led_indicator_config_t led_config = {
-        .blink_lists = NULL,
-        .blink_list_num = 0
+
+    // RMT backend-specific configuration
+    led_strip_rmt_config_t rmt_config = {
+        .resolution_hz = 10 * 1000 * 1000, // RMT resolution, 10MHz
+        .flags.with_dma = false,           // Disable DMA
     };
-    ESP_ERROR_CHECK(led_indicator_new_strips_device(&led_config, &strips_config, &led_handle));
+
+    ESP_ERROR_CHECK(led_strip_new_rmt_device(&strip_config, &rmt_config, &led_strip));
+
 
     esp_timer_create_args_t create_args = {
         .callback = cits_led_timer_cb,
@@ -338,10 +226,6 @@ void led_init(void)
         .name = "cits_led"
     };
     ESP_ERROR_CHECK(esp_timer_create(&create_args, &cits_led_timer_handle));
-
-    create_args.callback = eth_led_timer_cb;
-    create_args.name = "eth_led";
-    ESP_ERROR_CHECK(esp_timer_create(&create_args, &eth_led_timer_handle));
 
     create_args.callback = system_led_timer_cb;
     create_args.name = "system_led";
@@ -352,28 +236,22 @@ void led_init(void)
     ESP_ERROR_CHECK(esp_timer_create(&create_args, &s_pulse_timer));
 
     ESP_ERROR_CHECK(esp_event_handler_register(SNIFFER_EVENT_BASE, ESP_EVENT_ANY_ID, sniffer_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(MQTT_EVENT_BASE, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(APP_EVENT_BASE, ESP_EVENT_ANY_ID, app_event_handler, NULL));
 
     uint8_t brightness;
     // brightness receives the default value of 255 in led.c, and thus cannot fail
     ESP_ERROR_CHECK(config_get_u8(CONFIG_INDEX_LED_BRIGHTNESS, &brightness));
     led_brightness = brightness;
 
-    set_led_with_brightness(led_handle, LED_IRGB(0, 0xFF,    0,    0));
-    set_led_with_brightness(led_handle, LED_IRGB(1, 0xFF, 0xFF,    0));
-    set_led_with_brightness(led_handle, LED_IRGB(2,    0, 0xFF,    0));
-    set_led_with_brightness(led_handle, LED_IRGB(3,    0,    0, 0xFF));
-    set_led_with_brightness(led_handle, LED_IRGB(4, 0xFF,    0, 0xFF));
+    led_strip_clear(led_strip); // Clear the strip to off initially
 
     /* Boot self-test on LED 0 so a missing onboard WS2812 / wrong GPIO is
      * obvious at first glance: bright R → G → B → W, ~150 ms each. */
-    set_led_with_brightness(led_handle, LED_IRGB(LED_SYSTEM, 0xFF, 0x00, 0x00));
+    set_led_with_brightness(led_strip, LED_IRGB(LED_SYSTEM, 0xFF, 0x00, 0x00));
     vTaskDelay(pdMS_TO_TICKS(150));
-    set_led_with_brightness(led_handle, LED_IRGB(LED_SYSTEM, 0x00, 0xFF, 0x00));
+    set_led_with_brightness(led_strip, LED_IRGB(LED_SYSTEM, 0x00, 0xFF, 0x00));
     vTaskDelay(pdMS_TO_TICKS(150));
-    set_led_with_brightness(led_handle, LED_IRGB(LED_SYSTEM, 0x00, 0x00, 0xFF));
+    set_led_with_brightness(led_strip, LED_IRGB(LED_SYSTEM, 0x00, 0x00, 0xFF));
     vTaskDelay(pdMS_TO_TICKS(150));
-    set_led_with_brightness(led_handle, LED_IRGB(LED_SYSTEM, 0xFF, 0xFF, 0xFF));
+    set_led_with_brightness(led_strip, LED_IRGB(LED_SYSTEM, 0xFF, 0xFF, 0xFF));
     vTaskDelay(pdMS_TO_TICKS(150));
 }

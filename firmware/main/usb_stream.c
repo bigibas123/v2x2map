@@ -115,16 +115,6 @@ static bool is_u32_key(const char *key)
 static volatile bool s_cfg_scanning = false;
 bool usb_cfg_is_scanning(void) { return s_cfg_scanning; }
 
-/* Temp event handler: sets BIT0 on WIFI_EVENT_STA_START so the scan task
- * knows WiFi is ready before calling esp_wifi_scan_start(). */
-static EventGroupHandle_t s_scan_ready_evg;
-static void scan_sta_start_cb(void *arg, esp_event_base_t base,
-                               int32_t id, void *data)
-{
-    if (id == WIFI_EVENT_STA_START && s_scan_ready_evg)
-        xEventGroupSetBits(s_scan_ready_evg, BIT0);
-}
-
 /* WiFi scan task — triggered by SCAN command from the setup wizard */
 static void cfg_scan_task(void *arg)
 {

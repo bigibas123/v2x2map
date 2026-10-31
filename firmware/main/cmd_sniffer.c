@@ -21,7 +21,6 @@
 #include "cmd_pcap.h"
 #include "config.h"
 #include "events.h"
-#include "mqtt.h"
 #include "usb_stream.h"
 #include "bt_stream.h"
 
@@ -134,7 +133,6 @@ static void sniffer_task(void *)
             ESP_LOGW(TAG, "save captured packet failed");
         }
 
-        mqtt_handle_packet(&packet_info);
 
         usb_stream_publish_packet(packet_info.payload, (uint16_t)packet_info.length,
                                   packet_info.seconds, packet_info.microseconds);

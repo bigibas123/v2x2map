@@ -18,13 +18,9 @@
 #include "cmd_sniffer.h"
 #include "cmd_pcap.h"
 #include "config.h"
-#include "ethernet.h"
 #include "led.h"
-#include "mqtt.h"
 #include "ota.h"
-#include "sdcard.h"
 #include "spi.h"
-#include "temperature.h"
 #include "usb_stream.h"
 #include "bt_stream.h"
 #include "wifi_manager.h"
@@ -128,14 +124,9 @@ void app_main(void)
 
     initialize_spi();
 
-    // Make sure MQTT has registered its event handlers before Ethernet goes up
-    mqtt_init();
-
     /*--- Initialize Network ---*/
     /* Initialize WiFi */
     initialize_wifi();
-    /* Initialize Ethernet */
-    initialize_ethernet();
 
     /*--- Initialize Console ---*/
     console_init();
@@ -143,14 +134,7 @@ void app_main(void)
     sniffer_init();
     ota_init();
 
-#ifdef CONFIG_ENABLE_TEMPERATURE
-    temperature_init();
-#endif
-
     /* Register commands */
-#if CONFIG_ENABLE_SD
-    sdcard_register_commands();
-#endif
     register_sniffer_cmd();
     register_pcap_cmd();
 
@@ -163,9 +147,6 @@ void app_main(void)
     usb_stream_init();
     usb_config_rx_start();   /* USB RX config channel for setup wizard */
     bt_stream_init();
-
-    /* Start WiFi manager if configured; BLE always available */
-    wifi_manager_init();     /* read config + register handlers; no WiFi start yet */
 
     /* Signal the setup wizard BEFORE sniffer_autostart so the wizard can
      * run SCAN while the PHY is still in clean 2.4 GHz state.
