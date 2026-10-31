@@ -6,7 +6,6 @@ idf_component_register(
         "config.c"
         "events.c"
         "led.c"
-        "ota.c"
         "spi.c"
         "usb_stream.c"
         "bt_stream.c"
@@ -19,7 +18,6 @@ idf_component_register(
         esp_coex
         esp_driver_usb_serial_jtag
         esp_eth
-        esp_https_ota
         esp_netif
         esp_wifi
         fatfs

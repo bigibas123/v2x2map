@@ -19,7 +19,6 @@
 #include "cmd_pcap.h"
 #include "config.h"
 #include "led.h"
-#include "ota.h"
 #include "spi.h"
 #include "usb_stream.h"
 #include "bt_stream.h"
@@ -132,7 +131,6 @@ void app_main(void)
     console_init();
 
     sniffer_init();
-    ota_init();
 
     /* Register commands */
     register_sniffer_cmd();
@@ -141,8 +139,6 @@ void app_main(void)
     config_register_commands();
 
     register_reboot();
-
-    register_ota_cmd();
 
     usb_stream_init();
     usb_config_rx_start();   /* USB RX config channel for setup wizard */

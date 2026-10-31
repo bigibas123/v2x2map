@@ -65,7 +65,7 @@ static void set_led_color_based_on_state() {
 
 static void set_cits_led_idle(void)
 {
-    cits_led_state = 0x00;
+    cits_led_state = 0x10;
     set_led_color_based_on_state();
 }
 
@@ -131,7 +131,6 @@ static void apply_activity_led(void)
     if(s_ble_connected){
         ble_led_state = 0x00;
     }
-    cits_led_state    = 0x00;
 
     set_led_color_based_on_state();
 }
@@ -165,7 +164,7 @@ void led_status_ble_connected(bool c)
      if(c){
         led_pulse(0x00, 0xFF, 0xFF, 250);
      }else{
-        led_pulse(0xFF, 0x00, 0x00, 250);
+        led_pulse(0xFF, 0x00, 0x20, 250);
      }
 }
 
