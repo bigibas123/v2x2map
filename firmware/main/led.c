@@ -21,13 +21,11 @@
 static led_strip_handle_t led_strip; // LED strip handle
 #define LED_IRGB(i, r, g, b) SET_IRGB(i, r, g, b)
 
-bool sniffer_running;
 bool mqtt_connected;
 
 /* LED 0 (the only WS2812 on the Waveshare devboard) doubles as a status +
  * activity indicator. Idle background reflects sniffer + BLE state; pulses
  * (sniffer-rx, ble-tx, usb-tx) briefly override it for visual feedback. */
-static bool s_ble_connected;
 static struct {
     uint8_t  r, g, b;
     bool     active;
@@ -41,7 +39,7 @@ static uint8_t cits_led_state    = 0x00;
 static esp_timer_handle_t system_led_timer_handle;
 static esp_timer_handle_t cits_led_timer_handle;
 
-static uint8_t led_brightness;
+static uint8_t led_brightness = 0x10;
 
 static void set_led_with_brightness(led_indicator_handle_t handle, uint32_t irgb)
 {
@@ -59,32 +57,45 @@ static void set_led_with_brightness(led_indicator_handle_t handle, uint32_t irgb
 }
 
 static void set_led_color_based_on_state() {
-    set_led_with_brightness(led_strip, LED_IRGB(LED_SYSTEM, sniffer_led_state, cits_led_state, ble_led_state));
+    set_led_with_brightness(led_strip,
+        LED_IRGB(LED_SYSTEM, sniffer_led_state, cits_led_state, ble_led_state)
+    );
+}
+
+static void apply_activity_led()
+{
+    if (s_pulse.active) {
+        set_led_with_brightness(led_strip,
+            LED_IRGB(LED_SYSTEM, s_pulse.r, s_pulse.g, s_pulse.b));
+        return;
+    }
+
+    set_led_color_based_on_state();
 }
 
 
 static void set_cits_led_idle(void)
 {
     cits_led_state = 0x10;
-    set_led_color_based_on_state();
+    apply_activity_led();
 }
 
 static void set_cits_led_active(void)
 {
     cits_led_state = 0x78;
-    set_led_color_based_on_state();
+    apply_activity_led();
 }
 
 static void set_sniffer_led_stopped(void)
 {
     sniffer_led_state = 0x00;
-    set_led_color_based_on_state();
+    apply_activity_led();
 }
 
 static void set_sniffer_led_running(void)
 {
     sniffer_led_state = 0x78;
-    set_led_color_based_on_state();
+    apply_activity_led();
 }
 
 static void sniffer_event_handler(void* arg, esp_event_base_t event_base,
@@ -103,36 +114,17 @@ static void sniffer_event_handler(void* arg, esp_event_base_t event_base,
     case SNIFFER_STARTED:
         set_sniffer_led_running();
         set_cits_led_idle();
-        led_status_sniffer_running(true);
+        break;
+    case SNIFFER_PAUSE:
+        set_sniffer_led_running();
+        set_cits_led_idle();
+        led_status_sniffer_pause();
         break;
     case SNIFFER_STOPPED:
         set_sniffer_led_stopped();
         set_cits_led_idle();
-        led_status_sniffer_running(false);
         break;
     }
-}
-
-
-static void apply_activity_led(void)
-{
-    if (s_pulse.active) {
-        set_led_with_brightness(led_strip,
-            LED_IRGB(LED_SYSTEM, s_pulse.r, s_pulse.g, s_pulse.b));
-        return;
-    }
-
-    ble_led_state = 0xFF;
-    sniffer_led_state = 0x00;
-
-    if(sniffer_running){
-        sniffer_led_state = 0x78;
-    }
-    if(s_ble_connected){
-        ble_led_state = 0x00;
-    }
-
-    set_led_color_based_on_state();
 }
 
 static void pulse_end_cb(void *arg)
@@ -158,7 +150,7 @@ void led_pulse_usb_tx(void)     { led_pulse(0xFF, 0xFF, 0x00, 40); }
 
 void led_status_ble_connected(bool c)
 {
-    s_ble_connected = c;
+    ble_led_state = (c ? 0x00 : 0x78);
     /* Show the transition with a brief signal pulse: cyan = link up,
      * red = link gone, then settle into the new idle background. */
      if(c){
@@ -168,9 +160,9 @@ void led_status_ble_connected(bool c)
      }
 }
 
-void led_status_sniffer_running(bool r)
+void led_status_sniffer_pause()
 {
-    sniffer_running = r;
+    sniffer_led_state = 0x20;
     apply_activity_led();
 }
 
@@ -189,11 +181,6 @@ static void cits_led_timer_cb(void *)
 
 void led_update(void)
 {
-    uint8_t brightness;
-    // brightness receives the default value of 255 in led.c, and thus cannot fail
-    ESP_ERROR_CHECK(config_get_u8(CONFIG_INDEX_LED_BRIGHTNESS, &brightness));
-    led_brightness = brightness;
-
     apply_activity_led();
 
     /* Refresh idle background once per second as a fail-safe in case some
@@ -235,11 +222,6 @@ void led_init(void)
     ESP_ERROR_CHECK(esp_timer_create(&create_args, &s_pulse_timer));
 
     ESP_ERROR_CHECK(esp_event_handler_register(SNIFFER_EVENT_BASE, ESP_EVENT_ANY_ID, sniffer_event_handler, NULL));
-
-    uint8_t brightness;
-    // brightness receives the default value of 255 in led.c, and thus cannot fail
-    ESP_ERROR_CHECK(config_get_u8(CONFIG_INDEX_LED_BRIGHTNESS, &brightness));
-    led_brightness = brightness;
 
     led_strip_clear(led_strip); // Clear the strip to off initially
 

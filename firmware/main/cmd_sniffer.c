@@ -465,6 +465,7 @@ void sniffer_pause(void)
     esp_wifi_set_promiscuous(false);
     phy_11p_set(0, 0);
     esp_wifi_stop();
+    esp_event_post(SNIFFER_EVENT_BASE, SNIFFER_PAUSE, NULL, 0, 0);
     s_paused = true;
 }
 
@@ -479,5 +480,6 @@ void sniffer_resume(void)
     phy_11p_set(1, 0);
     esp_wifi_set_channel(140, WIFI_SECOND_CHAN_NONE);
     phy_change_channel(channel, 1, 0, 0);
+    esp_event_post(SNIFFER_EVENT_BASE, SNIFFER_STARTED, NULL, 0, 0);
     s_paused = false;
 }
